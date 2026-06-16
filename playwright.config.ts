@@ -1,98 +1,85 @@
 import { defineConfig, devices } from '@playwright/test';
 import { environment } from './config/environment';
 
-/**
- * Read environment variables from file.
- * https://github.com/motdotla/dotenv
- */
-// import dotenv from 'dotenv';
-// import path from 'path';
-// dotenv.config({ path: path.resolve(__dirname, '.env') });
-
-/**
- * See https://playwright.dev/docs/test-configuration.
- */
 export default defineConfig({
   testDir: './tests',
-  /* Run tests in files in parallel */
+
+  // Allows independent test files to execute in parallel.
   fullyParallel: true,
-  /* Fail the build on CI if you accidentally left test.only in the source code. */
+
+  // Prevents test.only from being committed and executed in CI.
   forbidOnly: Boolean(process.env.CI),
-  /* Retry on CI only */
+
+  // Retry only in CI to collect additional failure evidence.
   retries: process.env.CI ? 2 : 0,
-  /* Opt out of parallel tests on CI. */
+
+  // Start conservatively in CI. Increase after validating stability.
   workers: process.env.CI ? 1 : undefined,
-  timeout: 30 * 1000,
+
+  timeout: 30_000,
+
   expect: {
-    timeout: 5000,
+    timeout: 5_000,
   },
-  /* Reporter to use. See https://playwright.dev/docs/test-reporters */
+
   reporter: process.env.CI
     ? [
       ['line'],
-      ['html', { open: 'never' }],
+      [
+        'html',
+        {
+          outputFolder: 'playwright-report',
+          open: 'never',
+          title: 'Playwright Automation Report',
+        },
+      ],
     ]
     : [
       ['list'],
-      ['html', { open: 'never' }],
+      [
+        'html',
+        {
+          outputFolder: 'playwright-report',
+          open: 'never',
+          title: 'Playwright Automation Report',
+        },
+      ],
     ],
-  /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
-  use: {
-    /* Base URL to use in actions like `await page.goto('')`. */
-    // baseURL: 'http://localhost:3000',
 
-    /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
+  use: {
     baseURL: environment.baseUrl,
+
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
-    actionTimeout: 10 * 1000,
-    navigationTimeout: 30 * 1000,
+
+    actionTimeout: 10_000,
+    navigationTimeout: 30_000,
+
     ignoreHTTPSErrors: false,
   },
 
-  /* Configure projects for major browsers */
+  // Raw execution evidence, such as traces, screenshots and videos.
+  outputDir: 'test-results',
+
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: {
+        ...devices['Desktop Chrome'],
+      },
     },
-
     {
       name: 'firefox',
-      use: { ...devices['Desktop Firefox'] },
+      use: {
+        ...devices['Desktop Firefox'],
+      },
     },
-
     {
       name: 'webkit',
-      use: { ...devices['Desktop Safari'] },
+      use: {
+        ...devices['Desktop Safari'],
+      },
     },
-
-    /* Test against mobile viewports. */
-    // {
-    //   name: 'Mobile Chrome',
-    //   use: { ...devices['Pixel 5'] },
-    // },
-    // {
-    //   name: 'Mobile Safari',
-    //   use: { ...devices['iPhone 12'] },
-    // },
-
-    /* Test against branded browsers. */
-    // {
-    //   name: 'Microsoft Edge',
-    //   use: { ...devices['Desktop Edge'], channel: 'msedge' },
-    // },
-    // {
-    //   name: 'Google Chrome',
-    //   use: { ...devices['Desktop Chrome'], channel: 'chrome' },
-    // },
   ],
-
-  /* Run your local dev server before starting the tests */
-  // webServer: {
-  //   command: 'npm run start',
-  //   url: 'http://localhost:3000',
-  //   reuseExistingServer: !process.env.CI,
-  // },
 });
