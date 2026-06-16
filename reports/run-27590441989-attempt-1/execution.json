@@ -1,0 +1,9 @@
+{
+  "repository": "Uilen1/playwright-poc",
+  "branch": "master",
+  "commit": "eea4559e41141314f035729c6ea424d88c16caf8",
+  "runId": "27590441989",
+  "runNumber": "7",
+  "runAttempt": "1",
+  "workflow": "Playwright Tests"
+}
