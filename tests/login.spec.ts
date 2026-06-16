@@ -24,7 +24,7 @@ test.describe('Authentication', () => {
     loginPage,
   }) => {
     await loginPage.open();
-    await loginPage.login(users.standard);
+    await loginPage.login(users.invalid);
 
     await loginPage.expectErrorMessage(
       'Username and password do not match',
