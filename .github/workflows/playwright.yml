@@ -83,7 +83,9 @@ jobs:
           echo "| Repository | \`${{ github.repository }}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Branch | \`${{ github.ref_name }}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Commit | \`${{ github.sha }}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Workflow run | \`${{ github.run_number }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Run number | \`${{ github.run_number }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Run ID | \`${{ github.run_id }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Attempt | \`${{ github.run_attempt }}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Test result | \`${{ steps.playwright-tests.outcome }}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Report generated | \`${{ steps.report-check.outputs.exists }}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
@@ -92,15 +94,19 @@ jobs:
              [ "${{ github.ref }}" = "refs/heads/master" ] && \
              [ "${{ steps.report-check.outputs.exists }}" = "true" ]; then
             echo "The HTML report will be published to GitHub Pages." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && \
+               [ "${{ github.ref }}" = "refs/heads/master" ] && \
+               [ "${{ steps.report-check.outputs.exists }}" = "true" ]; then
+            echo "The HTML report will be published to GitHub Pages." >> "$GITHUB_STEP_SUMMARY"
           elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "Reports from Pull Requests are stored only as workflow artifacts." >> "$GITHUB_STEP_SUMMARY"
+            echo "Reports from pull requests are stored only as workflow artifacts." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload Playwright HTML report
         if: always() && steps.report-check.outputs.exists == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report-${{ github.run_number }}
+          name: playwright-report-${{ github.run_id }}-${{ github.run_attempt }}
           path: playwright-report/
           retention-days: 14
           if-no-files-found: error
@@ -109,7 +115,7 @@ jobs:
         if: always() && steps.report-check.outputs.exists == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-test-results-${{ github.run_number }}
+          name: playwright-test-results-${{ github.run_id }}-${{ github.run_attempt }}
           path: test-results/
           retention-days: 14
           if-no-files-found: ignore
@@ -122,52 +128,196 @@ jobs:
           exit 1
 
   prepare-pages:
-    name: Prepare Playwright report for GitHub Pages
+    name: Prepare report history for GitHub Pages
+
     needs:
       - test
 
     if: >
       always() &&
-      github.event_name == 'push' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       github.ref == 'refs/heads/master' &&
       needs.test.outputs.report-ready == 'true'
 
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     permissions:
-      contents: read
+      contents: write
       pages: write
       id-token: write
 
+    outputs:
+      report-path: ${{ steps.report-metadata.outputs.path }}
+
     steps:
-      - name: Download Playwright HTML report
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download current Playwright report
         uses: actions/download-artifact@v4
         with:
-          name: playwright-report-${{ github.run_number }}
-          path: playwright-report
+          name: playwright-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: current-report
+
+      - name: Restore previously published reports
+        shell: bash
+        run: |
+          mkdir -p pages-site
+
+          if git ls-remote --exit-code --heads origin gh-pages > /dev/null 2>&1; then
+            echo "Existing gh-pages branch found."
+            git fetch origin gh-pages
+
+            git archive origin/gh-pages | tar -x -C pages-site
+          else
+            echo "No gh-pages branch exists yet. A new report history will be created."
+          fi
+
+      - name: Add current report to execution-specific directory
+        id: report-metadata
+        shell: bash
+        env:
+          REPORT_DIRECTORY: run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+        run: |
+          REPORT_PATH="reports/${REPORT_DIRECTORY}"
+
+          mkdir -p "pages-site/${REPORT_PATH}"
+          cp -R current-report/. "pages-site/${REPORT_PATH}/"
+
+          echo "path=${REPORT_PATH}/" >> "$GITHUB_OUTPUT"
+
+          cat > "pages-site/${REPORT_PATH}/execution.json" <<EOF
+          {
+            "repository": "${{ github.repository }}",
+            "branch": "${{ github.ref_name }}",
+            "commit": "${{ github.sha }}",
+            "runId": "${{ github.run_id }}",
+            "runNumber": "${{ github.run_number }}",
+            "runAttempt": "${{ github.run_attempt }}",
+            "workflow": "${{ github.workflow }}"
+          }
+          EOF
+
+      - name: Create latest-report redirect
+        shell: bash
+        env:
+          REPORT_PATH: reports/run-${{ github.run_id }}-attempt-${{ github.run_attempt }}/
+        run: |
+          cat > pages-site/index.html <<EOF
+          <!DOCTYPE html>
+          <html lang="en">
+            <head>
+              <meta charset="UTF-8">
+              <meta
+                http-equiv="refresh"
+                content="0; url=${REPORT_PATH}"
+              >
+              <meta
+                name="viewport"
+                content="width=device-width, initial-scale=1.0"
+              >
+              <title>Latest Playwright Report</title>
+            </head>
+
+            <body>
+              <h1>Latest Playwright Report</h1>
+
+              <p>
+                Redirecting to the latest report.
+              </p>
+
+              <p>
+                <a href="${REPORT_PATH}">
+                  Open the latest Playwright report
+                </a>
+              </p>
+            </body>
+          </html>
+          EOF
+
+      - name: Keep only the latest 20 reports
+        shell: bash
+        run: |
+          if [ ! -d "pages-site/reports" ]; then
+            exit 0
+          fi
+
+          cd pages-site/reports
+
+          mapfile -t REPORTS < <(
+            find . \
+              -mindepth 1 \
+              -maxdepth 1 \
+              -type d \
+              -printf '%f\n' |
+            sort -V -r
+          )
+
+          if [ "${#REPORTS[@]}" -le 20 ]; then
+            echo "There are ${#REPORTS[@]} reports. No cleanup is required."
+            exit 0
+          fi
+
+          for REPORT in "${REPORTS[@]:20}"; do
+            echo "Removing old report: ${REPORT}"
+            rm -rf "${REPORT}"
+          done
+
+      - name: Save report history to gh-pages branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd pages-site
+
+          git init
+          git checkout -B gh-pages
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add .
+
+          if git diff --cached --quiet; then
+            echo "No report changes to commit."
+            exit 0
+          fi
+
+          git commit \
+            -m "Publish Playwright report for run ${{ github.run_id }} attempt ${{ github.run_attempt }}"
+
+          git remote add origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+
+          git push --force origin gh-pages
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
-      - name: Upload report to GitHub Pages
+      - name: Upload complete report history to GitHub Pages
         uses: actions/upload-pages-artifact@v3
         with:
-          path: playwright-report
+          path: pages-site
 
   deploy-report:
     name: Publish Playwright report
+
     needs:
       - test
       - prepare-pages
 
     if: >
       always() &&
-      github.event_name == 'push' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       github.ref == 'refs/heads/master' &&
       needs.test.outputs.report-ready == 'true' &&
       needs.prepare-pages.result == 'success'
 
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     permissions:
       pages: write
@@ -182,13 +332,29 @@ jobs:
       cancel-in-progress: false
 
     steps:
-      - name: Deploy report to GitHub Pages
+      - name: Deploy reports to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
 
-      - name: Add published report URL to summary
+      - name: Add execution-specific report URL to summary
         shell: bash
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+          REPORT_PATH: ${{ needs.prepare-pages.outputs.report-path }}
         run: |
+          REPORT_URL="${PAGE_URL}${REPORT_PATH}"
+
           echo "# Published Playwright Report" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "[Open the latest Playwright HTML report](${{ steps.deployment.outputs.page_url }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Information | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Run ID | \`${{ github.run_id }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Run number | \`${{ github.run_number }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Attempt | \`${{ github.run_attempt }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Commit | \`${{ github.sha }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "[Open the report generated by this execution](${REPORT_URL})" \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "[Open the latest available report](${PAGE_URL})" \
+            >> "$GITHUB_STEP_SUMMARY"
